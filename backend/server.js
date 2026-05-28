@@ -4,10 +4,12 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mysql = require("mysql2/promise");
+const path = require("path");
 const auth = require("./middleware/auth");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const FRONTEND_DIST_PATH = path.resolve(__dirname, "..", "frontend", "dist");
 
 app.use(cors());
 app.use(express.json());
@@ -21,8 +23,10 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0
 });
+let dbAvailable = false;
 
 async function initializeDatabase() {
+  await pool.query("SELECT 1");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id INT AUTO_INCREMENT PRIMARY KEY,
@@ -62,6 +66,7 @@ function clamp(value, min, max) {
 }
 
 async function saveSimulation(userId, moduleType, inputs, results) {
+  if (!dbAvailable) return;
   await pool.query(
     `INSERT INTO simulations (user_id, moduleType, inputs, results)
      VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON))`,
@@ -70,10 +75,13 @@ async function saveSimulation(userId, moduleType, inputs, results) {
 }
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", service: "CPSS backend" });
+  res.json({ status: "ok", service: "CPSS backend", dbAvailable });
 });
 
 app.post("/api/auth/register", async (req, res) => {
+  if (!dbAvailable) {
+    return res.status(503).json({ message: "Database is unavailable. Please try again later." });
+  }
   try {
     const email = (req.body.email || "").trim().toLowerCase();
     const password = req.body.password || "";
@@ -102,6 +110,9 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
+  if (!dbAvailable) {
+    return res.status(503).json({ message: "Database is unavailable. Please try again later." });
+  }
   try {
     const email = (req.body.email || "").trim().toLowerCase();
     const password = req.body.password || "";
@@ -3180,6 +3191,9 @@ app.post("/api/coupled_transport_solvers", auth, async (req, res) => {
 });
 
 app.get("/api/history", auth, async (req, res) => {
+  if (!dbAvailable) {
+    return res.status(503).json({ message: "Database is unavailable. History is not available." });
+  }
   try {
     const [rows] = await pool.query(
       `SELECT id, moduleType, inputs, results, timestamp
@@ -3195,13 +3209,23 @@ app.get("/api/history", auth, async (req, res) => {
   }
 });
 
-initializeDatabase()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`CPSS backend listening on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("Database initialization failed:", err);
-    process.exit(1);
+app.use(express.static(FRONTEND_DIST_PATH));
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api")) return next();
+  return res.sendFile(path.join(FRONTEND_DIST_PATH, "index.html"));
+});
+
+(async () => {
+  try {
+    await initializeDatabase();
+    dbAvailable = true;
+    console.log("Database initialized successfully.");
+  } catch (err) {
+    dbAvailable = false;
+    console.error("Database initialization failed, continuing without DB:", err.message);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`CPSS backend listening on port ${PORT}`);
   });
+})();

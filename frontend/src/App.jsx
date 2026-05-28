@@ -32,7 +32,7 @@ import {
   Flame
 } from "lucide-react";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 const stabilityCoeff = {
   A: { ay: 0.22, by: 0.5, az: 0.2, bz: 1.0 },
