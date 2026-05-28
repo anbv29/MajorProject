@@ -14,25 +14,49 @@ const FRONTEND_DIST_PATH = path.resolve(__dirname, "..", "frontend", "dist");
 app.use(cors());
 app.use(express.json());
 
-const poolConfig = {
-  host: process.env.DB_HOST || "localhost",
-  user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || "cpss1",
-  port: Number(process.env.DB_PORT) || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-};
-
-if (process.env.DB_SSL === "true") {
-  poolConfig.ssl = { rejectUnauthorized: true };
+function env(name, fallback = "") {
+  const value = process.env[name];
+  return value === undefined ? fallback : String(value).trim();
 }
 
-const pool = mysql.createPool(poolConfig);
+function buildPoolConfig(database) {
+  const config = {
+    host: env("DB_HOST", "localhost"),
+    user: env("DB_USER", "root"),
+    password: env("DB_PASSWORD", ""),
+    port: Number(env("DB_PORT", "3306")) || 3306,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    connectTimeout: 15000
+  };
+
+  if (database) {
+    config.database = database;
+  }
+
+  if (env("DB_SSL", "false") === "true") {
+    config.ssl = {
+      minVersion: "TLSv1.2",
+      rejectUnauthorized: true
+    };
+  }
+
+  return config;
+}
+
+const dbName = env("DB_NAME", "cpss1");
+const pool = mysql.createPool(buildPoolConfig(dbName));
 let dbAvailable = false;
 
 async function initializeDatabase() {
+  const bootstrapPool = mysql.createPool(buildPoolConfig());
+  try {
+    await bootstrapPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName.replace(/`/g, "")}\``);
+  } finally {
+    await bootstrapPool.end();
+  }
+
   await pool.query("SELECT 1");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -3229,7 +3253,11 @@ app.get("*", (req, res, next) => {
     console.log("Database initialized successfully.");
   } catch (err) {
     dbAvailable = false;
-    console.error("Database initialization failed, continuing without DB:", err.message);
+    console.error(
+      "Database initialization failed, continuing without DB:",
+      err.code || "UNKNOWN",
+      err.message
+    );
   }
 
   app.listen(PORT, () => {
